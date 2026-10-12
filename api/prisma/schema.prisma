@@ -1,0 +1,389 @@
+// Modelo de dados do App Devocional.
+// Livros da Bíblia não têm tabela: ficam em src/shared/biblia/livros.js e são
+// referenciados pelo código USFM (GEN, MAT, ROM...).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Usuário e autenticação ────────────────────────────────────────────────
+
+enum Papel {
+  USUARIO
+  ADMIN
+}
+
+model Usuario {
+  id                String    @id @default(uuid())
+  nome              String
+  username          String    @unique
+  email             String    @unique
+  senhaHash         String?
+  googleId          String?   @unique
+  appleId           String?   @unique
+  emailConfirmadoEm DateTime?
+  dataNascimento    DateTime  @db.Date
+  fotoUrl           String?
+  bio               String?
+  igreja            String?
+  perfilPrivado     Boolean   @default(true)
+  timezone          String    @default("America/Sao_Paulo")
+  horarioLembrete   String? // "HH:mm" no fuso do usuário
+  notificacoes      Json? // preferências por tipo de notificação
+  papel             Papel     @default(USUARIO)
+  criadoEm          DateTime  @default(now())
+  atualizadoEm      DateTime  @updatedAt
+
+  refreshTokens   RefreshToken[]
+  devocionais     Devocional[]
+  capitulosLidos  CapituloLido[]
+  anotacoes       Anotacao[]
+  pedidosOracao   PedidoOracao[]
+  orandoPor       OrandoPor[]
+  metas           Meta[]
+  streak          Streak?
+  seguindo        Seguidor[]        @relation("seguidor")
+  seguidores      Seguidor[]        @relation("seguido")
+  amens           Amem[]
+  comentarios     Comentario[]
+  gruposMembro    GrupoMembro[]
+  dispositivos    DispositivoPush[]
+  denunciasFeitas Denuncia[]
+  bloqueando      Bloqueio[]        @relation("bloqueador")
+  bloqueadoPor    Bloqueio[]        @relation("bloqueado")
+
+  @@map("usuarios")
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid())
+  usuarioId  String
+  tokenHash  String    @unique
+  expiraEm   DateTime
+  revogadoEm DateTime?
+  criadoEm   DateTime  @default(now())
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@map("refresh_tokens")
+}
+
+// ─── Devocional, leitura e anotações ───────────────────────────────────────
+
+model Devocional {
+  id                String   @id @default(uuid())
+  usuarioId         String
+  iniciadoEm        DateTime
+  dia               DateTime @db.Date // dia local do usuário (base do streak)
+  duracaoLeituraSeg Int      @default(0)
+  duracaoOracaoSeg  Int      @default(0)
+  manual            Boolean  @default(false)
+  visivelAmigos     Boolean  @default(false)
+  criadoEm          DateTime @default(now())
+
+  usuario           Usuario              @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  passagens         DevocionalPassagem[]
+  capitulosLidos    CapituloLido[]
+  anotacoes         Anotacao[]
+  pedidosOracao     PedidoOracao[]
+  amens             Amem[]
+  comentarios       Comentario[]
+  compartilhamentos Compartilhamento[]
+
+  @@index([usuarioId, dia])
+  @@index([usuarioId, criadoEm])
+  @@map("devocionais")
+}
+
+model DevocionalPassagem {
+  id              String @id @default(uuid())
+  devocionalId    String
+  livro           String // código USFM
+  capituloInicio  Int
+  capituloFim     Int
+  versiculoInicio Int?
+  versiculoFim    Int?
+
+  devocional Devocional @relation(fields: [devocionalId], references: [id], onDelete: Cascade)
+
+  @@index([devocionalId])
+  @@map("devocional_passagens")
+}
+
+// Checklist da Bíblia. "ciclo" permite reler a Bíblia sem perder o histórico.
+model CapituloLido {
+  id           String   @id @default(uuid())
+  usuarioId    String
+  livro        String
+  capitulo     Int
+  ciclo        Int      @default(1)
+  lidoEm       DateTime @default(now())
+  devocionalId String?
+
+  usuario    Usuario     @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  devocional Devocional? @relation(fields: [devocionalId], references: [id], onDelete: SetNull)
+
+  @@unique([usuarioId, ciclo, livro, capitulo])
+  @@map("capitulos_lidos")
+}
+
+model Anotacao {
+  id            String   @id @default(uuid())
+  usuarioId     String
+  devocionalId  String?
+  livro         String?
+  capitulo      Int?
+  texto         String?
+  oQueDeusFalou String?
+  aplicacao     String?
+  oracao        String?
+  visivelAmigos Boolean  @default(false) // privada por padrão
+  criadoEm      DateTime @default(now())
+  atualizadoEm  DateTime @updatedAt
+
+  usuario           Usuario            @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  devocional        Devocional?        @relation(fields: [devocionalId], references: [id], onDelete: SetNull)
+  compartilhamentos Compartilhamento[]
+
+  @@index([usuarioId, criadoEm])
+  @@index([usuarioId, livro])
+  @@map("anotacoes")
+}
+
+model PedidoOracao {
+  id            String    @id @default(uuid())
+  usuarioId     String
+  devocionalId  String?
+  texto         String
+  visivelAmigos Boolean   @default(false)
+  respondidoEm  DateTime?
+  criadoEm      DateTime  @default(now())
+
+  usuario           Usuario            @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  devocional        Devocional?        @relation(fields: [devocionalId], references: [id], onDelete: SetNull)
+  orandoPor         OrandoPor[]
+  compartilhamentos Compartilhamento[]
+
+  @@index([usuarioId])
+  @@map("pedidos_oracao")
+}
+
+model OrandoPor {
+  pedidoOracaoId String
+  usuarioId      String
+  criadoEm       DateTime @default(now())
+
+  pedidoOracao PedidoOracao @relation(fields: [pedidoOracaoId], references: [id], onDelete: Cascade)
+  usuario      Usuario      @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@id([pedidoOracaoId, usuarioId])
+  @@map("orando_por")
+}
+
+// Compartilhamento de devocional, anotação ou pedido de oração com um grupo.
+// (Compartilhar com amigos é o campo visivelAmigos de cada entidade.)
+model Compartilhamento {
+  id             String   @id @default(uuid())
+  grupoId        String
+  devocionalId   String?
+  anotacaoId     String?
+  pedidoOracaoId String?
+  criadoEm       DateTime @default(now())
+
+  grupo        Grupo         @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+  devocional   Devocional?   @relation(fields: [devocionalId], references: [id], onDelete: Cascade)
+  anotacao     Anotacao?     @relation(fields: [anotacaoId], references: [id], onDelete: Cascade)
+  pedidoOracao PedidoOracao? @relation(fields: [pedidoOracaoId], references: [id], onDelete: Cascade)
+
+  @@index([grupoId, criadoEm])
+  @@map("compartilhamentos")
+}
+
+// ─── Constância e metas ────────────────────────────────────────────────────
+
+model Streak {
+  usuarioId        String    @id
+  atual            Int       @default(0)
+  recorde          Int       @default(0)
+  ultimoDia        DateTime? @db.Date
+  semanaGracaUsada DateTime? @db.Date // segunda-feira da semana em que o dia de graça foi usado
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@map("streaks")
+}
+
+enum TipoMeta {
+  DIAS_SEMANA
+  MINUTOS_DIA
+  LEITURA_ATE_DATA
+}
+
+// Meta pessoal (grupoId nulo) ou do grupo (criada por um líder).
+model Meta {
+  id        String    @id @default(uuid())
+  criadorId String
+  grupoId   String?
+  tipo      TipoMeta
+  alvo      Int? // dias/semana ou minutos/dia
+  livros    String[] // códigos USFM, para LEITURA_ATE_DATA
+  inicio    DateTime  @db.Date
+  fim       DateTime? @db.Date
+  ativa     Boolean   @default(true)
+  criadoEm  DateTime  @default(now())
+
+  criador Usuario @relation(fields: [criadorId], references: [id], onDelete: Cascade)
+  grupo   Grupo?  @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+
+  @@index([criadorId, ativa])
+  @@index([grupoId])
+  @@map("metas")
+}
+
+// ─── Social ────────────────────────────────────────────────────────────────
+
+enum StatusSeguidor {
+  PENDENTE
+  ACEITO
+}
+
+model Seguidor {
+  seguidorId String
+  seguidoId  String
+  status     StatusSeguidor @default(PENDENTE)
+  criadoEm   DateTime       @default(now())
+
+  seguidor Usuario @relation("seguidor", fields: [seguidorId], references: [id], onDelete: Cascade)
+  seguido  Usuario @relation("seguido", fields: [seguidoId], references: [id], onDelete: Cascade)
+
+  @@id([seguidorId, seguidoId])
+  @@index([seguidoId, status])
+  @@map("seguidores")
+}
+
+model Amem {
+  devocionalId String
+  usuarioId    String
+  criadoEm     DateTime @default(now())
+
+  devocional Devocional @relation(fields: [devocionalId], references: [id], onDelete: Cascade)
+  usuario    Usuario    @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@id([devocionalId, usuarioId])
+  @@map("amens")
+}
+
+model Comentario {
+  id           String    @id @default(uuid())
+  devocionalId String
+  usuarioId    String
+  texto        String
+  removidoEm   DateTime?
+  criadoEm     DateTime  @default(now())
+
+  devocional Devocional @relation(fields: [devocionalId], references: [id], onDelete: Cascade)
+  usuario    Usuario    @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([devocionalId, criadoEm])
+  @@map("comentarios")
+}
+
+// ─── Grupos ────────────────────────────────────────────────────────────────
+
+enum PapelGrupo {
+  LIDER
+  MEMBRO
+}
+
+model Grupo {
+  id            String   @id @default(uuid())
+  nome          String
+  descricao     String?
+  fotoUrl       String?
+  codigoConvite String   @unique
+  avisoFixado   String?
+  criadoEm      DateTime @default(now())
+
+  membros           GrupoMembro[]
+  metas             Meta[]
+  compartilhamentos Compartilhamento[]
+
+  @@map("grupos")
+}
+
+model GrupoMembro {
+  grupoId   String
+  usuarioId String
+  papel     PapelGrupo @default(MEMBRO)
+  entrouEm  DateTime   @default(now())
+
+  grupo   Grupo   @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@id([grupoId, usuarioId])
+  @@index([usuarioId])
+  @@map("grupo_membros")
+}
+
+// ─── Notificações e moderação ──────────────────────────────────────────────
+
+model DispositivoPush {
+  id         String   @id @default(uuid())
+  usuarioId  String
+  token      String   @unique // Expo push token
+  plataforma String
+  criadoEm   DateTime @default(now())
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@map("dispositivos_push")
+}
+
+enum AlvoDenuncia {
+  USUARIO
+  DEVOCIONAL
+  ANOTACAO
+  COMENTARIO
+  PEDIDO_ORACAO
+  GRUPO
+}
+
+enum StatusDenuncia {
+  ABERTA
+  RESOLVIDA
+  DESCARTADA
+}
+
+model Denuncia {
+  id       String         @id @default(uuid())
+  autorId  String
+  alvoTipo AlvoDenuncia
+  alvoId   String
+  motivo   String
+  status   StatusDenuncia @default(ABERTA)
+  criadoEm DateTime       @default(now())
+
+  autor Usuario @relation(fields: [autorId], references: [id], onDelete: Cascade)
+
+  @@index([status, criadoEm])
+  @@map("denuncias")
+}
+
+model Bloqueio {
+  bloqueadorId String
+  bloqueadoId  String
+  criadoEm     DateTime @default(now())
+
+  bloqueador Usuario @relation("bloqueador", fields: [bloqueadorId], references: [id], onDelete: Cascade)
+  bloqueado  Usuario @relation("bloqueado", fields: [bloqueadoId], references: [id], onDelete: Cascade)
+
+  @@id([bloqueadorId, bloqueadoId])
+  @@map("bloqueios")
+}
